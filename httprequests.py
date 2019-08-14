@@ -2,9 +2,6 @@ import requests
 import json
 import os
 
-json_file = open('places.json')
-places_json = json.load(json_file)
-
 def queryHeroku(placeName):
     response = requests.get(
         "https://social-capital-ml.herokuapp.com/findPlace?name=%s" % placeName)
@@ -45,6 +42,7 @@ def getLocation(lat, long):
         if places:
             for place in places:
                 errorValue = place['lat'] - venueLocationLat
+                # Allow error in lat/long
                 if errorValue <= 0.002:
                     place['name'] = venueName
                     return place

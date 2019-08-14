@@ -3,6 +3,7 @@ import httprequests
 import datetime
 import sys
 
+
 def calculate_seg_score(place_time_dict, place_info_dict):
     total_stays = 0
     p1a_sum = 0
@@ -39,21 +40,38 @@ def calculate_seg_score(place_time_dict, place_info_dict):
         avg_p1a, avg_p2a, avg_p3a, avg_p4a, avg_seg))
 
 
-def analyse_location_history(file_path, time_threshold = 0):
+def is_stay(location):
+    # If the velocity is 0 or Google feels confident the user is still, we consider it to be a 'stay'
+    if 'velocity' in location and location['velocity'] == 0:
+        return True
+    if 'activity' in location:
+        for outer_activity in location['activity']:
+            for activity in outer_activity['activity']:
+                if activity['type'] == 'STILL' and activity['confidence'] > 50:
+                    return True
+
+
+def analyse_location_history(file_path):
     last_location_name = ""
     last_location_recorded = False
+    # A 'total' dict, the key is the place ID and the value is the number of visits
     place_time_dict = dict()
+    # A dict for each day
     place_time_dict_by_date = dict()
     place_info_dict = dict()
+
+    # Only consider the last 30 days
+    time_threshold = datetime.datetime.today() - datetime.timedelta(days=30)
+
     with open(file_path) as json_file:
         data = json.load(json_file)
-        print(len(data['locations']))
         for location in data['locations']:
-            if 'velocity' in location:
+            # Only consider it if it's a stay
+            if is_stay(location):
                 timestamp = int(location['timestampMs'])
-                if timestamp > time_threshold:
-                    date_time = datetime.datetime.fromtimestamp(
-                        timestamp // 1000.0)
+                date_time = datetime.datetime.fromtimestamp(
+                    timestamp // 1000.0)
+                if date_time > time_threshold:
                     date = date_time.date()
                     if not (date in place_time_dict_by_date):
                         place_time_dict_by_date[date] = dict()
@@ -66,23 +84,24 @@ def analyse_location_history(file_path, time_threshold = 0):
                         if not (found_place_id in place_info_dict):
                             place_info_dict[found_place_id] = found_place
                         if (found_place_name == last_location_name) and (last_location_recorded == False):
-
+                            # The user is still at the same place and the place is not recorded yet
+                            # so we consider the user stays there for a while
                             if found_place_id in place_time_dict:
                                 place_time_dict[found_place_id] += 1
                             else:
                                 place_time_dict[found_place_id] = 1
-
                             if found_place_id in place_time_dict_by_date[date]:
                                 place_time_dict_by_date[date][found_place_id] += 1
                             else:
                                 place_time_dict_by_date[date][found_place_id] = 1
-
                             last_location_recorded = True
                         else:
                             if (found_place_name != last_location_name):
                                 last_location_recorded = False
                         last_location_name = found_place['name']
 
+
+        # Sort the places by the degree of segregation
         sorted_places = sorted(place_info_dict.items(),
                                key=lambda x: x[1]['segregation'])
 
@@ -97,8 +116,10 @@ def analyse_location_history(file_path, time_threshold = 0):
         calculate_seg_score(place_time_dict, place_info_dict)
 
         for date, place_time_dict_on_date in place_time_dict_by_date.items():
-            print(date)
-            calculate_seg_score (place_time_dict_on_date, place_info_dict)
+            if place_time_dict_on_date:
+                print(date)
+                calculate_seg_score(place_time_dict_on_date, place_info_dict)
+
 
 if __name__ == "__main__":
     file_path = sys.argv[1]
