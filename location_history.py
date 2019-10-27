@@ -341,12 +341,12 @@ if __name__ == "__main__":
         with open(file_path) as json_file:
             data = json.load(json_file)
             locations = data['locations']
-            # filtered_locations = []
-            # for location in locations:
-            #     timestamp = int(location['timestampMs'])
-            #     lat = location['latitudeE7'] / (10 ** 7)
-            #     long = location['longitudeE7'] / (10 ** 7)
-            #     date_time = datetime.datetime.fromtimestamp(timestamp // 1000.0)
-            #     if datetime.datetime(2019, 7, 5) <= date_time:
-            #         filtered_locations.append(location)
-            utils.extract_stays(locations)
+            filtered_locations = []
+            for location in locations:
+                timestamp = int(location['timestampMs'])
+                lat = location['latitudeE7'] / (10 ** 7)
+                long = location['longitudeE7'] / (10 ** 7)
+                date_time = datetime.datetime.fromtimestamp(timestamp // 1000.0)
+                if datetime.datetime(2019, 7, 5) <= date_time:
+                    filtered_locations.append(location)
+            utils.extract_stays(filtered_locations)
