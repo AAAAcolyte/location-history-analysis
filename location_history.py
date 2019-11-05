@@ -1,6 +1,7 @@
 import json
 import httprequests
 import datetime
+import utils
 import sys
 from tzwhere import tzwhere
 import pytz
@@ -16,13 +17,15 @@ import utils
 number_name_dict = {}
 
 blockgroup_stays_dict = {}
-    total_stays = 0
-    p1a_sum = 0
-    p2a_sum = 0
-    p3a_sum = 0
-    p4a_sum = 0
-    seg_sum = 0
+total_stays = 0
+p1a_sum = 0
+p2a_sum = 0
+p3a_sum = 0
+p4a_sum = 0
+seg_sum = 0
 
+
+def calculate_seg_score(place_time_dict, place_info_dict):
     for place_id, times in place_time_dict.items():
         place_info = place_info_dict[place_id]
         place_name = place_info['name']
@@ -51,6 +54,118 @@ blockgroup_stays_dict = {}
         print('P1A Score %f P2A Score %f P3A Score %f P4A Score %f Seg Score %f' % (
             avg_p1a, avg_p2a, avg_p3a, avg_p4a, avg_seg))
 
+# Extract stays from location history data point
+# stay is of type ((lat, long), start_time, end_time)
+
+
+def extract_stays(locations, t_dur=5, l_roam=5):
+    # The same algorithm as in LNCS 3234
+    i = 0
+    s = []
+    while i < len(locations) - 1:
+        # print(i)
+        j = i + 1
+        if j < len(locations):
+            time_i = int(locations[i]['timestampMs'])
+            while j < len(locations) and utils.time_diff(locations, i, j) < 5:
+              # Find the next record with time difference larger than t_dur
+                j += 1
+            if j >= len(locations):
+                j -= 1
+            if i == j:
+                i = i + 1
+                continue
+            if utils.time_diff(locations, i, j) > 60:
+                # The difference is too big, we consider it as a new stay
+                i = j
+                continue
+            if utils.diameter(locations, i, j) > l_roam:
+                i = i + 1
+            else:
+                while j < len(locations) and utils.diameter(locations, i, j) <= l_roam and utils.time_diff(locations, i, j) <= 24 * 60:
+                    j += 1
+                j -= 1
+                time_j = int(locations[j]['timestampMs'])
+                s.append((utils.medoid(locations, i, j), time_i, time_j))
+                i = j + 1
+        else:
+            break
+    # extract_home_from_stays(s)
+    get_places(s)
+
+
+def is_stay_overnight(stay):
+    start_of_stay = datetime.datetime.fromtimestamp(
+        stay[1] / 1000, tz=pytz.timezone('America/New_York'))
+    cond = start_of_stay.hour <= 6 or start_of_stay.hour >= 20
+    return cond
+
+
+def extract_home_from_stays(stays):
+    home_stays = dict()
+    number_name_dict = dict()
+    with open('blockgroup.csv') as block_group_data:
+        rows = csv.DictReader(block_group_data)
+        for row in rows:
+            group_number = row['state'] + row['county'] + \
+                row['tract'] + row['block group']
+            name = row['NAME']
+            number_name_dict[group_number] = name
+    for stay in stays:
+        if is_stay_overnight(stay):
+            (lat, long) = stay[0]
+            census_block = httprequests.getCensusBlock(lat, long)
+            census_block_group = census_block[:12]
+            block_group_name = number_name_dict[census_block_group]
+            if block_group_name in home_stays:
+                home_stays[block_group_name] += 1
+            else:
+                home_stays[block_group_name] = 1
+
+    for name, stay in home_stays.items():
+        print('The home is in %s, you spent %d nights there' %
+              (name, stay))
+
+        # location = httprequests.getLocation(lat / (10 ** 7), long / (10 ** 7))
+        # if location:
+        #   print (location[0]['name'])
+        # length_of_stay = (stay[2] - stay[1]) / 60000 / 60
+        # if (length_of_stay > 5):
+        #     (lat, long) = stay[0]
+        #     print (httprequests.getLocation(lat / (10 ** 7), long / (10 ** 7)))
+
+
+def get_places(stays):
+    place_stay = dict()
+    for stay in stays:
+        (lat, long) = stay[0]
+        found_places = httprequests.getLocation(lat, long)
+        if found_places:
+            place_name = found_places[0]['name']
+            start = datetime.datetime.fromtimestamp(
+                stay[1] / 1000.0, tz=pytz.timezone('America/New_York'))
+            end = datetime.datetime.fromtimestamp(
+                stay[2] / 1000.0, tz=pytz.timezone('America/New_York'))
+            duration = end - start
+            print("Stayed at %s from %s to %s, last %s" %
+                  (place_name, start, end, duration))
+            if place_name not in place_stay:
+                place_stay[place_name] = duration
+            else:
+                place_stay[place_name] = place_stay[place_name] + duration
+
+    sorted_by_stay = sorted(
+        place_stay.items(), key=lambda kv: kv[1], reverse=True)
+    print(len(sorted_by_stay))
+    with open('stay.csv', 'w') as f:
+        csv_out = csv.writer(f)
+        for row in sorted_by_stay:
+            csv_out.writerow(row)
+
+    for place, stay in place_stay.items():
+        print("%s at %s" % (stay, place))
+
+
 def is_stay(location):
     # If the velocity is 0 or Google feels confident the user is still, we consider it to be a 'stay'
     if 'velocity' in location and location['velocity'] == 0:
@@ -60,6 +175,7 @@ def is_stay(location):
             for activity in outer_activity['activity']:
                 if activity['type'] == 'STILL' and activity['confidence'] > 50:
                     return True
+
 
 def analyse_location_history(file_path):
     last_location_name = ""
@@ -164,7 +280,8 @@ def analyse_location_history(file_path):
 
         for (place_id, duration) in place_stay_length_dict.items():
             time = datetime.timedelta(milliseconds=duration)
-            print("You spent %s time at %s" % (time, place_info_dict[place_id]['name']))
+            print("You spent %s time at %s" %
+                  (time, place_info_dict[place_id]['name']))
 
         # for (place_id, place_info) in sorted_places:
         #     if (place_id in place_time_dict):
@@ -181,45 +298,32 @@ def analyse_location_history(file_path):
         #         print(date)
         #         calculate_seg_score(place_time_dict_on_date, place_info_dict)
 
+
 def is_night(date_time):
     # print (date_time.hour)
     return date_time.hour <= 6 or date_time.hour >= 20
+
 
 def get_center_point(cluster):
     # print (cluster)
     MultiPoint(points=cluster)
     centroid = (MultiPoint(cluster).centroid.x, MultiPoint(cluster).centroid.y)
-    centermost_point = min(cluster, key=lambda point: great_circle(point, centroid).m)
+    centermost_point = min(
+        cluster, key=lambda point: great_circle(point, centroid).m)
     # print (centermost_point)
     return tuple(centermost_point)
 
-def cluster_location(coordinates_list):
-    # coordinates_list = coordinates_list[:5]
-    # print (coordinates_list)
-    # coordinates_list[0] = coordinates_list[0][:5]
-    # coordinates_list[1] = coordinates_list[1][:5]
-    # plt.scatter(coordinates_list[:,0], coordinates_list[:,1], marker='o')
-    # plt.show()
-    # fit_coordinates_list = StandardScaler().fit(coordinates_list)
-    # print(fit_coordinates_list)
-    # print (fit_coordinates_list)
-    # plt.plot(coordinates[0], coordinates[1])
-    # plt.figure(figsize=(8, 8))
-    # plt.show()
-    #
-    # pred = KMeans().fit_predict(coordinates_list)
-    # c = Census("04cfdf7360e9e83ba2c2e502fe3372fb75dd578e")
-    # c.acs5.state_county_blockgroup()
 
+def cluster_location(coordinates_list):
     global number_name_dict
     global blockgroup_stays_dict
     print(len(number_name_dict))
     db = DBSCAN(eps=0.3, min_samples=5).fit(coordinates_list)
     cluster_labels = db.labels_
-    # print (cluster_labels)
-    num_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-    clusters = pd.Series([coordinates_list[cluster_labels == n] for n in range(num_clusters)])
-    # print('Number of clusters: {}'.format(num_clusters))
+    num_clusters = len(set(cluster_labels)) - \
+        (1 if -1 in cluster_labels else 0)
+    clusters = pd.Series([coordinates_list[cluster_labels == n]
+                          for n in range(num_clusters)])
     if num_clusters > 0:
         for cluster in clusters:
             lat, long = get_center_point(cluster)
@@ -236,57 +340,19 @@ def cluster_location(coordinates_list):
                     else:
                         blockgroup_stays_dict[census_block_group] = 1
 
-    # print (pred)
-    # plt.scatter(coordinates_list[:,0], coordinates_list[:,1], c=pred)
-    # plt.show()
-    # core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
-    # core_samples_mask[db.core_sample_indices_] = True
-    # labels = pred
-    # n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
-    # n_noise_ = list(labels).count(-1)
-    #
-    # print('Estimated number of clusters: %d' % n_clusters_)
-    # print('Estimated number of noise points: %d' % n_noise_)
-    #
-    # # #############################################################################
-    # # Plot result
-    #
-    # # Black removed and is used for noise instead.
-    # unique_labels = set(labels)
-    # colors = [plt.cm.Spectral(each)
-    #           for each in np.linspace(0, 1, len(unique_labels))]
-    #
-    # for k, col in zip(unique_labels, colors):
-    #     if k == -1:
-    #         # Black used for noise.
-    #         col = [0, 0, 0, 1]
-    #
-    #     class_member_mask = (labels == k)
-    #     print(class_member_mask & core_samples_mask)
-    #     xy = coordinates_list[class_member_mask & core_samples_mask]
-    #     plt.plot(xy[:, 0], xy[:, 1], 'o', markerfacecolor=tuple(col),
-    #              markeredgecolor='k', markersize=14)
-    #
-    #     xy = coordinates_list[class_member_mask & ~core_samples_mask]
-    #     plt.plot(xy[:, 0], xy[:, 1], 'o', markerfacecolor=tuple(col),
-    #              markeredgecolor='k', markersize=6)
-    #
-    # plt.title('Estimated number of clusters: %d' % n_clusters_)
-    # plt.show()
 
 def extract_home(file_path):
     global number_name_dict
     with open('blockgroup.csv') as block_group_data:
         rows = csv.DictReader(block_group_data)
         for row in rows:
-            group_number = row['state'] + row['county'] + row['tract'] + row['block group']
+            group_number = row['state'] + row['county'] + \
+                row['tract'] + row['block group']
             name = row['NAME']
             number_name_dict[group_number] = name
 
     coordinates = []
-    tz = tzwhere.tzwhere(forceTZ=True)
     night_places = dict()
-    was_night = False
     with open(file_path) as json_file:
         data = json.load(json_file)
         locations = data['locations']
@@ -294,15 +360,11 @@ def extract_home(file_path):
             lat = location['latitudeE7'] / (10 ** 7)
             long = location['longitudeE7'] / (10 ** 7)
             coordinates.append([lat, long])
-            tzName = tz.tzNameAt(lat, long, forceTZ=True)
-            if tzName == 'uninhabited':
-                continue
-            timezone = pytz.timezone(tzName)
             timestamp = int(location['timestampMs'])
-            date_time = datetime.datetime.fromtimestamp(timestamp // 1000.0)
-            if date_time < datetime.datetime(2019, 7, 1):
+            date_time = datetime.datetime.fromtimestamp(
+                timestamp / 1000, tz=pytz.timezone('America/New_York'))
+            if date_time < datetime.datetime(2019, 7, 5, tzinfo=pytz.timezone('America/New_York')):
                 continue
-            date_time.astimezone(timezone)
             date = date_time.date()
             if is_night(date_time):
                 if date not in night_places:
@@ -311,17 +373,19 @@ def extract_home(file_path):
                     night_places[date].append([lat, long])
     for date, places in night_places.items():
         print(date)
-        # print (places)
         cluster_location(np.array(places))
 
     global blockgroup_stays_dict
 
-    sorted_homes = sorted(blockgroup_stays_dict.items(), key=lambda x: x[1], reverse=True)
+    sorted_homes = sorted(blockgroup_stays_dict.items(),
+                          key=lambda x: x[1], reverse=True)
     num = 0
     for blockgroup, stays in sorted_homes:
         if num < 5:
-            print('The home is in %s, you spent %d nights there' % (number_name_dict[str(blockgroup)], stays))
+            print('The home is in %s, you spent %d nights there' %
+                  (number_name_dict[str(blockgroup)], stays))
             num += 1
+
 
 def time_gap(file_path):
     with open(file_path) as json_file:
@@ -334,19 +398,11 @@ def time_gap(file_path):
             gap = max(gap, timestamp - last_timestamp)
         print(gap)
 
+
 if __name__ == "__main__":
     file_path = sys.argv[1]
     if (file_path):
+        location_history = utils.preprocess_location_history(file_path)
+        extract_stays(location_history)
+        print("----------------")
         extract_home(file_path)
-        with open(file_path) as json_file:
-            data = json.load(json_file)
-            locations = data['locations']
-            filtered_locations = []
-            for location in locations:
-                timestamp = int(location['timestampMs'])
-                lat = location['latitudeE7'] / (10 ** 7)
-                long = location['longitudeE7'] / (10 ** 7)
-                date_time = datetime.datetime.fromtimestamp(timestamp // 1000.0)
-                if datetime.datetime(2019, 7, 5) <= date_time:
-                    filtered_locations.append(location)
-            utils.extract_stays(filtered_locations)
