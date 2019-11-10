@@ -137,30 +137,38 @@ def extract_home_from_stays(stays):
 
 def get_places(stays):
     place_stay = dict()
+    fsq_info = dict()
     for stay in stays:
         (lat, long) = stay[0]
         found_places = httprequests.getLocation(lat, long)
         if found_places:
-            place_name = found_places[0]['name']
+            most_likely_place = found_places[0]
+            place_info = {'lat': most_likely_place['lat'], 'long': most_likely_place['lon'],
+                          'id': most_likely_place['_id'], 'name': most_likely_place['name']}
+            place_id = found_places[0]['_id']
+            fsq_info[place_id] = place_info
             start = datetime.datetime.fromtimestamp(
                 stay[1] / 1000.0, tz=pytz.timezone('America/New_York'))
             end = datetime.datetime.fromtimestamp(
                 stay[2] / 1000.0, tz=pytz.timezone('America/New_York'))
             duration = end - start
-            print("Stayed at %s from %s to %s, last %s" %
-                  (place_name, start, end, duration))
-            if place_name not in place_stay:
-                place_stay[place_name] = duration
+            if place_id not in place_stay:
+                place_stay[place_id] = duration
             else:
-                place_stay[place_name] = place_stay[place_name] + duration
+                place_stay[place_id] = place_stay[place_id] + duration
 
     sorted_by_stay = sorted(
         place_stay.items(), key=lambda kv: kv[1], reverse=True)
-    print(len(sorted_by_stay))
     with open('stay.csv', 'w') as f:
-        csv_out = csv.writer(f)
+        filed_names = ['id', 'lat', 'long', 'name', 'time']
+        writer = csv.DictWriter(f=f, fieldnames=filed_names)
+        writer.writeheader()
         for row in sorted_by_stay:
-            csv_out.writerow(row)
+            id = row[0]
+            time = row[1]
+            place_info = fsq_info[id]
+            place_info['time'] = time
+            writer.writerow(place_info)
 
     for place, stay in place_stay.items():
         print("%s at %s" % (stay, place))
@@ -327,18 +335,17 @@ def cluster_location(coordinates_list):
     if num_clusters > 0:
         for cluster in clusters:
             lat, long = get_center_point(cluster)
-            print(lat, long)
             census_block = httprequests.getCensusBlock(lat, long)
             if census_block:
                 # Not null
                 census_block_group = census_block[:12]
                 print(census_block)
                 if str(census_block_group) in number_name_dict:
-                    print(number_name_dict[census_block_group])
-                    if census_block_group in blockgroup_stays_dict:
-                        blockgroup_stays_dict[census_block_group] += 1
+                    name = number_name_dict[census_block_group]
+                    if name in blockgroup_stays_dict:
+                        blockgroup_stays_dict[name] += 1
                     else:
-                        blockgroup_stays_dict[census_block_group] = 1
+                        blockgroup_stays_dict[name] = 1
 
 
 def extract_home(file_path):
@@ -383,8 +390,13 @@ def extract_home(file_path):
     for blockgroup, stays in sorted_homes:
         if num < 5:
             print('The home is in %s, you spent %d nights there' %
-                  (number_name_dict[str(blockgroup)], stays))
+                  (blockgroup, stays))
             num += 1
+
+    with open('home.csv', 'w') as f:
+        csv_out = csv.writer(f)
+        for row in sorted_homes:
+            csv_out.writerow(row)
 
 
 def time_gap(file_path):
@@ -404,5 +416,5 @@ if __name__ == "__main__":
     if (file_path):
         location_history = utils.preprocess_location_history(file_path)
         extract_stays(location_history)
-        print("----------------")
-        extract_home(file_path)
+        # print("----------------")
+        # extract_home(file_path)
