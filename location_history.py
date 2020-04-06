@@ -307,6 +307,127 @@ def analyse_location_history(file_path):
         #         calculate_seg_score(place_time_dict_on_date, place_info_dict)
 
 
+def analyse_location_history(json_file):
+    last_location_name = ""
+    last_location_recorded = False
+    # A 'total' dict, the key is the place ID and the value is the number of visits
+    place_time_dict = dict()
+    place_stay_length_dict = dict()
+    # A dict for each day
+    place_time_dict_by_date = dict()
+    place_stay_length_dict_by_date = dict()
+    place_info_dict = dict()
+
+    # Only consider the last 30 days
+    # time_threshold = datetime.datetime.today() - datetime.timedelta(days=30)
+
+    time_threshold = datetime.datetime(2019, 7, 1)
+    time_upper_limit = datetime.datetime(2019, 7, 30)
+    last_timestamp = None
+    data = json.load(json_file)
+    for location in data['locations']:
+        # Only consider it if it's a stay
+        if is_stay(location):
+            timestamp = int(location['timestampMs'])
+            if not last_timestamp:
+                last_timestamp = timestamp
+            date_time = datetime.datetime.fromtimestamp(
+                timestamp // 1000.0)
+            if date_time > time_threshold and date_time < time_upper_limit:
+                date = date_time.date()
+                if not (date in place_time_dict_by_date):
+                    place_time_dict_by_date[date] = dict()
+                    place_stay_length_dict_by_date[date] = dict()
+                lat = location['latitudeE7'] / (10 ** 7)
+                long = location['longitudeE7'] / (10 ** 7)
+                found_places = httprequests.getLocation(lat, long)
+                if found_places:
+                    most_confident_place = found_places[0]
+                    print(most_confident_place['confidence'])
+                    found_place_name = most_confident_place['name']
+                    print(found_place_name)
+                    found_place_id = most_confident_place['_id']
+                    if not (found_place_id in place_info_dict):
+                        place_info_dict[found_place_id] = most_confident_place
+                    if (found_place_name == last_location_name):
+                        if not last_location_recorded:
+                            # The user is still at the same place and the place is not recorded yet
+                            # so we consider the user stays there for a while
+                            if found_place_id in place_time_dict:
+                                place_time_dict[found_place_id] += 1
+                            else:
+                                place_time_dict[found_place_id] = 1
+                            if found_place_id in place_time_dict_by_date[date]:
+                                place_time_dict_by_date[date][found_place_id] += 1
+                            else:
+                                place_time_dict_by_date[date][found_place_id] = 1
+                            last_location_recorded = True
+                        else:
+                            # The user spends more time at the place
+                            duration = timestamp - last_timestamp
+                            if found_place_id in place_stay_length_dict:
+                                place_stay_length_dict[found_place_id] += duration
+                            else:
+                                place_stay_length_dict[found_place_id] = 0
+                            if found_place_id in place_stay_length_dict_by_date[date]:
+                                place_stay_length_dict_by_date[date][found_place_id] += duration
+                            else:
+                                place_stay_length_dict_by_date[date][found_place_id] = 0
+                    else:
+                        if found_place_name != last_location_name:
+                            last_location_recorded = False
+                    last_location_name = most_confident_place['name']
+        last_timestamp = timestamp
+        # for found_place in found_places:
+        #     print (found_place['confidence'])
+        #     found_place_name = found_place['name']
+        #     print (found_place_name)
+        #     found_place_id = found_place['_id']
+        #     if not (found_place_id in place_info_dict):
+        #         place_info_dict[found_place_id] = found_place
+        #     if (found_place_name == last_location_name) and (last_location_recorded == False):
+        #         # The user is still at the same place and the place is not recorded yet
+        #         # so we consider the user stays there for a while
+        #         if found_place_id in place_time_dict:
+        #             place_time_dict[found_place_id] += 1
+        #         else:
+        #             place_time_dict[found_place_id] = 1
+        #         if found_place_id in place_time_dict_by_date[date]:
+        #             place_time_dict_by_date[date][found_place_id] += 1
+        #         else:
+        #             place_time_dict_by_date[date][found_place_id] = 1
+        #         last_location_recorded = True
+        #     else:
+        #         if (found_place_name != last_location_name):
+        #             last_location_recorded = False
+        #     last_location_name = found_place['name']
+        # return
+
+        # Sort the places by the degree of segregation
+        sorted_places = sorted(place_info_dict.items(),
+                               key=lambda x: x[1]['segregation'])
+
+        for (place_id, duration) in place_stay_length_dict.items():
+            time = datetime.timedelta(milliseconds=duration)
+            print("You spent %s time at %s" %
+                  (time, place_info_dict[place_id]['name']))
+
+            # for (place_id, place_info) in sorted_places:
+            #     if (place_id in place_time_dict):
+            #         place_name = place_info['name']
+            #         place_segscore = place_info['segregation']
+            #         visit_times = place_time_dict[place_id]
+            #         print('You visited %s %d times, it has a segregation score of %f' % (
+            #             place_name, visit_times, place_segscore))
+            #
+            # calculate_seg_score(place_time_dict, place_info_dict)
+            #
+            # for date, place_time_dict_on_date in place_time_dict_by_date.items():
+            #     if place_time_dict_on_date:
+            #         print(date)
+            #         calculate_seg_score(place_time_dict_on_date, place_info_dict
+
+
 def is_night(date_time):
     # print (date_time.hour)
     return date_time.hour <= 6 or date_time.hour >= 20
